@@ -10,6 +10,8 @@ ctrlc = "3"
 toml = "0.5"
 anyhow = "1"
 libc = "0.2"
+notify = "4"
+glob = "0.3"
 colored = "2"
 nix = "0.23.1"
 clap = { version = "3", features = ["derive"] }

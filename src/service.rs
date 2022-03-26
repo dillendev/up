@@ -1,80 +1,60 @@
-use std::ffi::CString;
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use nix::sys::signal::{kill, Signal};
-use nix::unistd::{execv, fork, ForkResult, Pid};
+use glob::Pattern;
 
 use crate::log;
-
-//use nix::sys::wait::waitpid;
-//waitpid(child, None)?;
-
-macro_rules! cstr {
-    ($s:expr) => {
-        CString::new($s).unwrap().as_c_str()
-    };
-}
+use crate::process::Process;
 
 pub struct Service {
     pub name: String,
     pub cmd: String,
-    pub pid: Option<Pid>,
+    pub proc: Option<Process>,
+    pub watched_paths: Vec<Pattern>,
 }
 
 impl Service {
-    pub fn new(name: String, cmd: String) -> Self {
+    pub fn new(name: String, cmd: String, watched_paths: Vec<Pattern>) -> Self {
         Self {
             name,
             cmd,
-            pid: None,
+            proc: None,
+            watched_paths,
         }
     }
 
-    pub fn is_running(&self) -> bool {
-        match self.pid {
+    pub fn is_up(&self) -> bool {
+        match &self.proc {
             None => false,
-            Some(pid) => kill(pid, None).is_ok(),
+            Some(proc) => proc.is_running(),
         }
     }
 
     pub fn start(&mut self) -> Result<()> {
-        if self.pid.is_some() {
+        if self.proc.is_some() {
             return Err(anyhow!("service '{}' already started", self.name));
         }
 
-        match unsafe { fork()? } {
-            ForkResult::Parent { child, .. } => {
-                log::info(
-                    format!("service/{}", self.name),
-                    format!("started (pid={})", child),
-                );
+        let proc = Process::run(&["/bin/sh", "-c", self.cmd.as_str()])?;
 
-                self.pid = Some(child);
+        log::info(
+            format!("service/{}", self.name),
+            format!("started (pid={})", proc),
+        );
 
-                Ok(())
-            }
-            ForkResult::Child => {
-                execv(
-                    cstr!("/bin/sh"),
-                    &[cstr!("/bin/sh"), cstr!("-c"), cstr!(self.cmd.as_str())],
-                )?;
+        self.proc = Some(proc);
 
-                unsafe { libc::_exit(0) }
-            }
-        }
-    }
-
-    pub fn detach(&mut self) {
-        self.pid.take();
+        Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
-        let pid = match self.pid.take() {
-            Some(pid) => pid,
+        let proc = match self.proc.take() {
+            Some(proc) => proc,
             None => return Ok(()),
         };
 
-        kill(pid, Signal::SIGTERM)?;
+        proc.stop(Duration::from_secs(10))?;
+
         log::info(format!("service/{}", self.name), "stopped");
 
         Ok(())
