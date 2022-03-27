@@ -1,19 +1,25 @@
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs};
 
 use anyhow::Result;
 use clap::Parser;
 use glob::Pattern;
-use notify::{watcher, RecursiveMode, Watcher};
+use libc::{SIGCHLD, SIGINT, SIGTERM};
+use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
+use signal_hook::flag;
+use signal_hook::iterator::{Handle, Signals};
 
 use crate::config::Config;
 use crate::daemon::Daemon;
+use crate::event::Event;
 use crate::service::Service;
 
 mod config;
 mod daemon;
+mod event;
 mod log;
 mod process;
 mod service;
@@ -30,25 +36,34 @@ fn load_config(filename: PathBuf) -> Result<Config> {
     Ok(toml::from_str(&config)?)
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
     let cwd = env::current_dir()?;
     let config = load_config(args.filename)?;
 
-    let (tx, rx) = channel();
-    let mut watcher = watcher(tx, Duration::from_secs(1))?;
+    // Set up the file watcher
+    let (watcher_tx, watcher_rx) = channel();
+    let mut watcher = watcher(watcher_tx, Duration::from_secs(1))?;
     watcher.watch(&cwd, RecursiveMode::Recursive)?;
 
-    let (mut daemon, stop_handler) = Daemon::new(cwd, rx);
+    // Set up the event channel
+    let (tx, rx) = channel();
+
+    proxy_watcher_events(watcher_rx, tx.clone());
+
+    // Set up the daemon
+    let (mut daemon, stopped) = Daemon::new(cwd, rx);
 
     log::info("daemon", "starting..");
 
-    ctrlc::set_handler(move || {
-        log::info("daemon", "stopping..");
+    // Forward signals
+    flag::register(SIGTERM, Arc::clone(&stopped))?;
+    flag::register(SIGINT, stopped)?;
 
-        stop_handler.clone().stop();
-    })?;
+    let proxy_handle = proxy_signals(tx.clone())?;
 
+    // Start services
     for (name, cfg) in config.services {
         let mut patterns = vec![];
 
@@ -63,5 +78,43 @@ fn main() -> Result<()> {
 
     daemon.monitor();
 
+    proxy_handle.close();
+
+    log::info("daemon", "stopped");
+
     Ok(())
+}
+
+fn proxy_signals(tx: Sender<Event>) -> Result<Handle> {
+    let mut signals = Signals::new(&[SIGCHLD])?;
+    let handle = signals.handle();
+
+    tokio::spawn(async move {
+        for signal in signals.forever() {
+            if signal == SIGCHLD {
+                if tx.send(Event::ChildExited).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(handle)
+}
+
+fn proxy_watcher_events(rx: Receiver<DebouncedEvent>, tx: Sender<Event>) {
+    tokio::spawn(async move {
+        'event_loop: for event in rx {
+            match event {
+                DebouncedEvent::Create(path)
+                | DebouncedEvent::Write(path)
+                | DebouncedEvent::Remove(path) => {
+                    if tx.send(Event::FileChanged(path)).is_err() {
+                        break 'event_loop;
+                    }
+                }
+                _ => continue,
+            }
+        }
+    });
 }

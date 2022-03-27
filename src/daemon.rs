@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use notify::DebouncedEvent;
+use nix::sys::wait::{waitpid, WaitPidFlag};
 
-use crate::log;
+use crate::{Event, log};
 use crate::service::Service;
 
 fn check_service(service: &mut Service) -> Result<()> {
@@ -33,38 +33,25 @@ fn restart_service(service: &mut Service) -> Result<()> {
     service.start()
 }
 
-#[derive(Clone)]
-pub struct StopHandler {
-    stopped: Rc<AtomicBool>,
-}
-
-unsafe impl Send for StopHandler {}
-
-impl StopHandler {
-    pub fn stop(self) {
-        self.stopped.store(true, Ordering::Relaxed);
-    }
-}
-
 pub struct Daemon {
     root: PathBuf,
-    stopped: Rc<AtomicBool>,
+    events: Receiver<Event>,
+    stopped: Arc<AtomicBool>,
     services: Vec<Service>,
-    file_changes: Receiver<DebouncedEvent>,
 }
 
 impl Daemon {
-    pub fn new(root: PathBuf, file_changes: Receiver<DebouncedEvent>) -> (Self, StopHandler) {
-        let stopped = Rc::new(AtomicBool::new(false));
+    pub fn new(root: PathBuf, events: Receiver<Event>) -> (Self, Arc<AtomicBool>) {
+        let stopped = Arc::new(AtomicBool::new(false));
 
         (
             Self {
                 root,
+                events,
                 services: vec![],
-                file_changes,
-                stopped: Rc::clone(&stopped),
+                stopped: Arc::clone(&stopped),
             },
-            StopHandler { stopped },
+            stopped,
         )
     }
 
@@ -83,17 +70,12 @@ impl Daemon {
         Ok(())
     }
 
-    fn process_file_changes(&mut self) -> HashMap<String, bool> {
+    fn process_events(&mut self) -> HashMap<String, bool> {
         let mut marked_restart = HashMap::new();
 
-        while let Ok(event) = self.file_changes.try_recv() {
+        while let Ok(event) = self.events.try_recv() {
             match event {
-                DebouncedEvent::NoticeWrite(_) => {}
-                DebouncedEvent::NoticeRemove(_) => {}
-                DebouncedEvent::Chmod(_) => {}
-                DebouncedEvent::Create(path)
-                | DebouncedEvent::Write(path)
-                | DebouncedEvent::Remove(path) => {
+                Event::FileChanged(path) => {
                     let path = path.strip_prefix(&self.root).unwrap_or(&path);
 
                     for service in self
@@ -106,9 +88,10 @@ impl Daemon {
                         }
                     }
                 }
-                DebouncedEvent::Rename(_, _) => {}
-                DebouncedEvent::Rescan => {}
-                DebouncedEvent::Error(_, _) => {}
+                Event::ChildExited => {
+                    // Make sure zombie processes are cleaned up
+                    waitpid(None, None).ok();
+                }
             }
         }
 
@@ -117,7 +100,7 @@ impl Daemon {
 
     pub fn monitor(mut self) {
         while !self.stopped.load(Ordering::Relaxed) {
-            let marked_restart = self.process_file_changes();
+            let marked_restart = self.process_events();
 
             // Make sure all services are healthy
             for service in self.services.iter_mut() {
@@ -147,6 +130,15 @@ impl Daemon {
     }
 
     pub fn shutdown(&mut self) {
+        log::info("daemon", "shutting down");
+
+        // Cleanup zombie processes before shutting down
+        loop {
+            if !waitpid(None, Some(WaitPidFlag::WNOHANG)).is_ok() {
+                break;
+            }
+        }
+
         let mut i = 0;
 
         while !self.services.is_empty() {
