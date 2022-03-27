@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
+use nix::sys::wait::WaitStatus::StillAlive;
 use nix::sys::wait::{waitpid, WaitPidFlag};
 
-use crate::{Event, log};
 use crate::service::Service;
+use crate::{log, Event};
 
 fn check_service(service: &mut Service) -> Result<()> {
     if service.is_up() {
@@ -134,8 +135,9 @@ impl Daemon {
 
         // Cleanup zombie processes before shutting down
         loop {
-            if !waitpid(None, Some(WaitPidFlag::WNOHANG)).is_ok() {
-                break;
+            match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
+                Ok(StillAlive) | Err(_) => break,
+                Ok(_) => continue,
             }
         }
 
