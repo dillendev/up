@@ -83,6 +83,7 @@ impl Daemon {
                 // Make sure zombie processes are cleaned up
                 waitpid(None, None).ok();
             }
+            Event::WakeUp => {}
         }
     }
 
@@ -113,6 +114,10 @@ impl Daemon {
         while !self.stopped.load(Ordering::Relaxed) {
             // Handle pending events synchronously
             self.handle_events_wait(WAIT_DURATION);
+
+            if self.stopped.load(Ordering::Relaxed) {
+                break;
+            }
 
             // Make sure all services are healthy
             for (service, flags) in self.services.iter_mut() {

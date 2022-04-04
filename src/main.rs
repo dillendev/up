@@ -87,16 +87,18 @@ async fn main() -> Result<()> {
 }
 
 fn proxy_signals(tx: Sender<Event>) -> Result<Handle> {
-    let mut signals = Signals::new(&[SIGCHLD])?;
+    let mut signals = Signals::new(&[SIGCHLD, SIGTERM, SIGINT])?;
     let handle = signals.handle();
 
     tokio::spawn(async move {
         for signal in signals.forever() {
-            if signal == SIGCHLD {
-                if tx.send(Event::ChildExited).is_err() {
-                    break;
-                }
-            }
+            let event = match signal {
+                SIGCHLD => Event::ChildExited,
+                SIGTERM | SIGINT => Event::WakeUp,
+                _ => continue,
+            };
+
+            let _ = tx.send(event).ok();
         }
     });
 
