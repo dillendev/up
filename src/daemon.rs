@@ -11,16 +11,16 @@ use nix::sys::wait::WaitStatus::StillAlive;
 use nix::sys::wait::{waitpid, WaitPidFlag};
 
 use crate::service::Service;
-use crate::{log, Event};
+use crate::Event;
 
 fn check_service(service: &mut Service) -> Result<()> {
     if service.is_up() {
         return Ok(());
     }
 
-    log::info(
-        "daemon",
-        format!("service '{}' stopped, restarting", service.name),
+    log::info!(
+        target: "daemon",
+        "service '{}' stopped, restarting", service.name,
     );
 
     service.stop()?;
@@ -28,7 +28,7 @@ fn check_service(service: &mut Service) -> Result<()> {
 }
 
 fn restart_service(service: &mut Service) -> Result<()> {
-    log::info("daemon", format!("restarting service '{}'", service.name));
+    log::info!(target: "daemon", "restarting service '{}'", service.name);
 
     service.stop()?;
     service.start()
@@ -64,7 +64,7 @@ impl Daemon {
             .last_mut()
             .ok_or_else(|| anyhow!("no such service"))?;
 
-        log::info("daemon", format!("starting service '{}'", service.name));
+        log::info!(target: "daemon", "starting service '{}'", service.name);
 
         service.start()?;
 
@@ -106,9 +106,9 @@ impl Daemon {
             // Make sure all services are healthy
             for service in self.services.iter_mut() {
                 if let Err(err) = check_service(service) {
-                    log::error(
-                        "daemon",
-                        format!("failed to check service '{}': {}", service.name, err),
+                    log::error!(
+                        target: "daemon",
+                        "failed to check service '{}': {}", service.name, err,
                     );
 
                     continue;
@@ -116,9 +116,9 @@ impl Daemon {
 
                 if marked_restart.contains_key(&service.name) {
                     if let Err(err) = restart_service(service) {
-                        log::error(
-                            "daemon",
-                            format!("failed to restart service '{}': {}", service.name, err),
+                        log::error!(
+                            target: "daemon",
+                            "failed to restart service '{}': {}", service.name, err,
                         );
                     }
                 }
@@ -131,7 +131,7 @@ impl Daemon {
     }
 
     pub fn shutdown(&mut self) {
-        log::info("daemon", "shutting down");
+        log::info!(target: "daemon", "shutting down");
 
         // Cleanup zombie processes before shutting down
         loop {
@@ -146,12 +146,12 @@ impl Daemon {
         while !self.services.is_empty() {
             let service = &mut self.services[i];
 
-            log::info("daemon", format!("stopping service '{}'", service.name));
+            log::info!(target: "daemon", "stopping service '{}'", service.name);
 
             if let Err(err) = service.stop() {
-                log::error(
-                    "daemon",
-                    format!("failed to stop service '{}': {}", service.name, err),
+                log::error!(
+                    target: "daemon",
+                    "failed to stop service '{}': {}", service.name, err,
                 );
                 continue;
             }

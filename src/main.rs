@@ -20,7 +20,6 @@ use crate::service::Service;
 mod config;
 mod daemon;
 mod event;
-mod log;
 mod process;
 mod service;
 
@@ -38,6 +37,8 @@ fn load_config(filename: PathBuf) -> Result<Config> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    pretty_env_logger::init_custom_env("UP_LOG");
+
     let args = Args::parse();
     let cwd = env::current_dir()?;
     let config = load_config(args.filename)?;
@@ -55,7 +56,7 @@ async fn main() -> Result<()> {
     // Set up the daemon
     let (mut daemon, stopped) = Daemon::new(cwd, rx);
 
-    log::info("daemon", "starting..");
+    log::info!(target: "daemon", "starting..");
 
     // Forward signals
     flag::register(SIGTERM, Arc::clone(&stopped))?;
@@ -74,13 +75,13 @@ async fn main() -> Result<()> {
         daemon.attach(Service::new(name, cfg.cmd, patterns))?;
     }
 
-    log::info("daemon", "started");
+    log::info!(target: "daemon", "started");
 
     daemon.monitor();
 
     proxy_handle.close();
 
-    log::info("daemon", "stopped");
+    log::info!(target: "daemon", "stopped");
 
     Ok(())
 }

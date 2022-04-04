@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use glob::Pattern;
 
-use crate::log;
 use crate::process::Process;
 
 pub struct Service {
@@ -36,11 +35,9 @@ impl Service {
         }
 
         let proc = Process::run(&["/bin/sh", "-c", self.cmd.as_str()])?;
+        let target = format!("service/{}", self.name);
 
-        log::info(
-            format!("service/{}", self.name),
-            format!("started (pid={})", proc),
-        );
+        log::info!(target: &target, "started (pid={})", proc);
 
         self.proc = Some(proc);
 
@@ -55,7 +52,9 @@ impl Service {
 
         proc.stop(Duration::from_secs(10))?;
 
-        log::info(format!("service/{}", self.name), "stopped");
+        let target = format!("service/{}", self.name);
+
+        log::info!(target: &target, "stopped");
 
         Ok(())
     }
