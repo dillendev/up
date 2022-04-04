@@ -72,12 +72,12 @@ async fn main() -> Result<()> {
             patterns.push(Pattern::new(&watch_pattern)?);
         }
 
-        daemon.attach(Service::new(name, cfg.cmd, patterns))?;
+        daemon.add(Service::new(name, cfg.cmd, patterns))?;
     }
 
     log::info!(target: "daemon", "started");
 
-    daemon.monitor();
+    daemon.run_event_loop();
 
     proxy_handle.close();
 
