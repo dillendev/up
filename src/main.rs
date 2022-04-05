@@ -25,7 +25,7 @@ mod service;
 
 #[derive(Debug, Parser)]
 struct Args {
-    #[clap(default_value = ".dev/up.toml")]
+    #[clap(default_value = "up.toml")]
     filename: PathBuf,
 }
 
